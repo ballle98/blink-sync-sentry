@@ -1,0 +1,68 @@
+# blink-sync-sentry example configuration
+#
+# Copy to ~/.config/blink-sync-sentry/config.yaml and edit.
+# All values shown here are optional; defaults are noted in comments.
+#
+# Two layouts are supported:
+#   1. Single-account (flat) — credentials at top level
+#   2. Multi-account — an "accounts:" list with per-account settings
+#
+# Credentials SHOULD come from environment variables (never hardcode secrets):
+#   Single account:   BLINK_USERNAME / BLINK_PASSWORD
+#   Multi-account:    BLINK_<ACCOUNT_NAME>_USERNAME / BLINK_<ACCOUNT_NAME>_PASSWORD
+#                     (e.g. BLINK_HOME_USERNAME, BLINK_OFFICE_PASSWORD)
+
+# ─── Global defaults (apply to all accounts unless overridden) ────────────
+
+# Retention policy — at least one must be set for 'clean' / 'watch'.
+retention:
+  # Delete clips older than N days.
+  retention_days: 14
+  # OR delete oldest clips until total local usage ≤ X GB.
+  # max_usage_gb: 4.0
+
+# Optional: download clips to this directory before deleting them.
+# archive_dir: /mnt/nas/blink-archive
+
+# USB drive capacity in GB (optional)
+# storage_capacity_gb: 64
+
+# Seconds to sleep between API calls (rate limiting).
+# request_delay_seconds: 2.0
+
+# Watch / daemon mode settings.
+watch:
+  # Minutes between cleanup cycles.
+  interval_minutes: 60
+
+# ─── Single-account layout (simplest setup) ──────────────────────────────
+# Uncomment below if you have one Blink account.
+# Credentials should come from env vars instead of being written here.
+
+# sync_module_name: MySyncModule
+# token_file: ~/.config/blink-sync-sentry/token.json
+
+# ─── Multi-account layout ────────────────────────────────────────────────
+# Uncomment below to manage sync modules across multiple Blink accounts.
+# Each account gets its own credentials, token file, and sync module list.
+# Per-account retention and archive_dir override the global defaults above.
+
+# accounts:
+#   - name: home
+#     # username/password from BLINK_HOME_USERNAME / BLINK_HOME_PASSWORD env vars
+#     token_file: ~/.config/blink-sync-sentry/token_home.json
+#     sync_module_names:
+#       - FrontYard
+#       - BackYard
+#     retention:
+#       retention_days: 7
+#     archive_dir: /mnt/nas/blink-home
+#
+#   - name: office
+#     # username/password from BLINK_OFFICE_USERNAME / BLINK_OFFICE_PASSWORD env vars
+#     token_file: ~/.config/blink-sync-sentry/token_office.json
+#     sync_module_names:
+#       - Lobby
+#     retention:
+#       max_usage_gb: 2.0
+#     storage_capacity_gb: 32  # Office has a smaller USB drive
