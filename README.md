@@ -23,20 +23,27 @@ Built on top of [blinkpy](https://github.com/fronzbot/blinkpy).
 
 ## Installation
 
-Requires **Python 3.11+**.
+Requires **Python 3.11+**. A virtual environment is recommended, since many
+distros block system-wide installs (PEP 668).
 
 ```bash
-# From the repo
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Core install
 pip install .
 
 # With optional rich output
 pip install '.[rich]'
 
-# Development
+# Development (editable, adds pytest + ruff)
 pip install -e '.[dev]'
 ```
 
-After installation, the `blink-sync-sentry` command is available.
+The `blink-sync-sentry` command is then available inside the activated
+environment. To use it without activating, call `.venv/bin/blink-sync-sentry`
+directly (e.g. in a systemd unit). If you'd rather not manage a venv,
+`pipx install blink-sync-sentry` works well for CLI tools.
 
 ## Configuration
 
@@ -187,6 +194,10 @@ Daemon mode requires `--force` and a pre-existing token file (run an
 interactive session first to complete 2FA).
 
 #### systemd example
+
+If you installed into a virtual environment, replace
+`/usr/local/bin/blink-sync-sentry` below with the venv path, for example
+`/home/you/.venv/bin/blink-sync-sentry`.
 
 For a single account:
 
