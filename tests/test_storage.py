@@ -11,6 +11,7 @@ from blink_sync_sentry.storage import (
     ClipStats,
     StorageStatus,
     compute_stats,
+    fetch_manifest,
     fetch_storage_status,
     filter_clips_by_age,
     filter_clips_by_usage,
@@ -307,3 +308,25 @@ class TestVerifyDeletions:
         sync.update_local_storage_manifest = AsyncMock()
         assert await verify_deletions(sync, []) == []
         sync.update_local_storage_manifest.assert_not_called()
+
+
+class TestFetchManifest:
+    async def test_returns_clips_on_success(self) -> None:
+        sync = _make_sync()
+        sync.update_local_storage_manifest = AsyncMock(return_value=True)
+        sync._local_storage = {"manifest": [_make_clip(1, NOW)]}
+
+        clips = await fetch_manifest(sync)
+
+        assert [c.id for c in clips] == [1]
+
+    async def test_warns_on_failed_refresh(self, caplog) -> None:
+        sync = _make_sync()
+        sync.update_local_storage_manifest = AsyncMock(return_value=None)
+        sync._local_storage = {"manifest": []}
+
+        with caplog.at_level("WARNING", logger="blink_sync_sentry.storage"):
+            clips = await fetch_manifest(sync)
+
+        assert clips == []
+        assert "may be stale" in caplog.text

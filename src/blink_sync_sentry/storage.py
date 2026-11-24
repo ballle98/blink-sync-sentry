@@ -156,9 +156,18 @@ async def fetch_manifest(sync: BlinkSyncModule) -> list[LocalStorageMediaItem]:
 
     Triggers a manifest refresh on the sync module, then returns the
     sorted list of ``LocalStorageMediaItem`` objects.
+
+    If the refresh fails, the previous manifest is returned with a warning;
+    an empty result must not be trusted as "the drive is empty" in that case.
     """
     _LOGGER.info("Requesting local storage manifest for '%s' …", sync.name)
-    await sync.update_local_storage_manifest()
+    refreshed = await sync.update_local_storage_manifest()
+    if not refreshed:
+        _LOGGER.warning(
+            "Manifest refresh failed for '%s' — results may be stale "
+            "(this is not proof that the drive is empty).",
+            sync.name,
+        )
     manifest = list(sync._local_storage["manifest"])
     _LOGGER.info("Manifest contains %d clip(s).", len(manifest))
     return manifest
