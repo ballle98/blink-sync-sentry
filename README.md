@@ -213,6 +213,10 @@ blink-sync-sentry watch --interval-minutes 30 --max-usage-gb 8.0 --force
 Daemon mode requires `--force` and a pre-existing token file (run an
 interactive session first to complete 2FA).
 
+Each cycle verifies the previous cycle's deletions against the manifest it
+already fetched — no extra requests. Any clip that is still listed is
+logged at ERROR level and retried on the next cycle.
+
 #### systemd example
 
 If you installed into a virtual environment, replace

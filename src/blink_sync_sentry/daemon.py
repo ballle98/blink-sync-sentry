@@ -15,7 +15,7 @@ from blink_sync_sentry.storage import fetch_manifest, select_clips_for_deletion
 
 if TYPE_CHECKING:
     from blinkpy.blinkpy import Blink
-    from blinkpy.sync_module import BlinkSyncModule
+    from blinkpy.sync_module import BlinkSyncModule, LocalStorageMediaItem
 
     from blink_sync_sentry.config import AccountConfig, AppConfig
 
@@ -37,6 +37,9 @@ class WatchDaemon:
         self.targets = targets
         self.cfg = cfg
         self._stop_event = asyncio.Event()
+        # Clip IDs deleted in the previous cycle, keyed by "account/sync",
+        # verified against the next cycle's manifest (which costs nothing extra).
+        self._pending: dict[str, list[int]] = {}
 
     async def run(self) -> None:
         """Start the watch loop. Blocks until a stop signal is received."""
@@ -74,6 +77,7 @@ class WatchDaemon:
                 archive_dir = self.cfg.effective_archive_dir(acct)
 
                 clips = await fetch_manifest(sync)
+                self._verify_previous_deletions(label, clips)
                 to_delete = select_clips_for_deletion(
                     clips,
                     retention_days=retention.retention_days,
@@ -90,6 +94,8 @@ class WatchDaemon:
                     archive_dir=archive_dir,
                     request_delay=self.cfg.request_delay_seconds,
                 )
+                if result.deleted:
+                    self._pending[label] = list(result.deleted)
                 _LOGGER.info(
                     "[%s] Cycle result: %d deleted, %d failed.",
                     label,
@@ -102,6 +108,37 @@ class WatchDaemon:
                     label,
                 )
         _LOGGER.info("=== Watch cycle complete ===")
+
+    def _verify_previous_deletions(
+        self, label: str, clips: Sequence[LocalStorageMediaItem]
+    ) -> list[int]:
+        """Check last cycle's deletions against this cycle's manifest.
+
+        The delete endpoint answers 200 even when nothing was removed
+        (blinkpy #970), so the next manifest read is the first real proof.
+        Stuck IDs are reported and left eligible for another attempt,
+        because a USB-busy failure can succeed on a later cycle.
+        """
+        deleted_ids = self._pending.pop(label, [])
+        if not deleted_ids:
+            return []
+
+        present = sorted(set(deleted_ids) & {clip.id for clip in clips})
+        if present:
+            _LOGGER.error(
+                "[%s] %d clip(s) reported deleted in the previous cycle are still "
+                "in the manifest: %s. The deletions did not take effect.",
+                label,
+                len(present),
+                ", ".join(str(i) for i in present),
+            )
+        else:
+            _LOGGER.info(
+                "[%s] Verified %d clip(s) from the previous cycle were deleted.",
+                label,
+                len(deleted_ids),
+            )
+        return present
 
     def _request_stop(self) -> None:
         _LOGGER.info("Stop signal received.")
