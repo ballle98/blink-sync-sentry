@@ -158,6 +158,18 @@ blink-sync-sentry status --sync-module "My Sync Module"
 blink-sync-sentry status --account office
 ```
 
+The output includes the drive usage reported by the sync module itself
+(`Drive: 97% used (reported by sync module)`), which comes from the
+module's own `local_storage/status` endpoint rather than an estimate from
+the clip list. This matters when the module reports the drive as full
+while the manifest lists zero clips: that state is warned about explicitly,
+because the files are occupying space but are not visible to the API. In
+that case, clear storage from the Blink app (Clips → Edit → Delete all).
+
+`--storage-capacity` adds a second, manifest-based estimate; if it
+disagrees sharply with the reported percentage, the drive holds files the
+manifest does not list.
+
 ### Clean old clips (dry-run)
 
 ```bash
@@ -176,6 +188,14 @@ blink-sync-sentry clean --retention-days 14 --max-usage-gb 4.0
 ```bash
 blink-sync-sentry clean --retention-days 14 --force
 ```
+
+After deleting, the manifest is re-read to confirm the clips are really
+gone. This exists because the delete endpoint returns HTTP 200 even when
+nothing was removed (blinkpy #970), so a successful response alone is not
+proof. Any clip still listed is reported under `still_present_ids` in
+`--json` output, printed as a warning, and makes the run exit with code 1.
+If the manifest refresh itself fails, verification is skipped rather than
+reported as a failure.
 
 ### Archive before deleting
 
@@ -234,7 +254,7 @@ Environment=BLINK_OFFICE_PASSWORD=office-password
 | Code | Meaning |
 |---|---|
 | `0` | Success |
-| `1` | Error (auth failure, API error, etc.) |
+| `1` | Error (auth failure, API error, failed or unverified deletion, etc.) |
 | `2` | Dry-run — clips would have been deleted |
 
 ## Non-interactive mode

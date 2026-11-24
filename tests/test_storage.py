@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from blink_sync_sentry.storage import (
     ClipStats,
+    StorageStatus,
     compute_stats,
+    fetch_storage_status,
     filter_clips_by_age,
     filter_clips_by_usage,
     select_clips_for_deletion,
+    verify_deletions,
 )
 
 
@@ -174,3 +177,133 @@ class TestSelectClipsForDeletion:
         assert 1 in ids
         assert 2 in ids
         assert 3 not in ids
+
+
+def _make_sync(attrs: list[str] | None = None) -> MagicMock:
+    """Create a mock sync module, optionally restricted to given attributes."""
+    sync = MagicMock(spec=attrs or ["name", "local_storage", "network_id", "sync_id", "blink"])
+    sync.name = "test"
+    sync.local_storage = True
+    sync.network_id = 654321
+    sync.sync_id = 123456
+    sync.blink.account_id = 111
+    sync.blink.urls.base_url = "https://rest.example"
+    return sync
+
+
+SAMPLE_STATUS = {
+    "local_storage_enabled": True,
+    "usb_state": "active",
+    "usb_storage_used": 97,
+    "usb_storage_full": True,
+    "storage_warning": 0,
+    "sm_backup_enabled": True,
+    "last_backup_completed": "2026-11-23T06:38:07+00:00",
+    "sync_module_id": 123456,
+    "network_id": 654321,
+    "usb_format_compatible": True,
+    "sm_backup_in_progress": False,
+    "last_backup_result": "success",
+}
+
+
+class TestStorageStatus:
+    def test_from_payload_maps_fields(self) -> None:
+        status = StorageStatus.from_payload(SAMPLE_STATUS)
+        assert status.used_percent == 97
+        assert status.full is True
+        assert status.usb_state == "active"
+        assert status.backup_enabled is True
+        assert status.backup_in_progress is False
+        assert status.last_backup_result == "success"
+        assert status.raw == SAMPLE_STATUS
+
+    def test_is_nearly_full_with_full_flag(self) -> None:
+        assert StorageStatus.from_payload({"usb_storage_full": True}).is_nearly_full
+
+    @pytest.mark.parametrize("used,expected", [(89, False), (90, True), (100, True)])
+    def test_is_nearly_full_threshold(self, used: int, expected: bool) -> None:
+        status = StorageStatus.from_payload({"usb_storage_used": used})
+        assert status.is_nearly_full is expected
+
+    def test_is_nearly_full_without_usage(self) -> None:
+        assert not StorageStatus.from_payload({}).is_nearly_full
+
+    def test_as_dict_round_trips_payload(self) -> None:
+        assert StorageStatus.from_payload(SAMPLE_STATUS).as_dict()["used_percent"] == 97
+
+
+class TestFetchStorageStatus:
+    async def test_inactive_storage_returns_none(self) -> None:
+        sync = _make_sync()
+        sync.local_storage = False
+        with patch("blink_sync_sentry.storage.api.http_get", new=AsyncMock()) as get:
+            assert await fetch_storage_status(sync) is None
+        get.assert_not_called()
+
+    async def test_falls_back_to_direct_request(self) -> None:
+        sync = _make_sync()
+        with patch(
+            "blink_sync_sentry.storage.api.http_get",
+            new=AsyncMock(return_value=SAMPLE_STATUS),
+        ) as get:
+            status = await fetch_storage_status(sync)
+
+        assert status is not None
+        assert status.used_percent == 97
+        url = get.await_args.args[1]
+        assert url == (
+            "https://rest.example/api/v1/accounts/111/networks/654321"
+            "/sync_modules/123456/local_storage/status"
+        )
+
+    async def test_missing_endpoint_returns_none(self) -> None:
+        sync = _make_sync()
+        with patch(
+            "blink_sync_sentry.storage.api.http_get", new=AsyncMock(return_value=None)
+        ):
+            assert await fetch_storage_status(sync) is None
+
+    async def test_prefers_blinkpy_wrapper_when_present(self) -> None:
+        sync = _make_sync(
+            ["name", "local_storage", "network_id", "sync_id", "blink",
+             "update_local_storage_status"]
+        )
+        sync.update_local_storage_status = AsyncMock(return_value=SAMPLE_STATUS)
+        with patch("blink_sync_sentry.storage.api.http_get", new=AsyncMock()) as get:
+            status = await fetch_storage_status(sync)
+
+        assert status is not None
+        assert status.full is True
+        get.assert_not_called()
+
+
+class TestVerifyDeletions:
+    async def test_reports_ids_still_in_manifest(self) -> None:
+        sync = _make_sync()
+        sync.update_local_storage_manifest = AsyncMock(return_value=True)
+        sync._local_storage = {"manifest": [_make_clip(2, NOW), _make_clip(3, NOW)]}
+
+        still = await verify_deletions(sync, [1, 2])
+        assert still == [2]
+
+    async def test_all_deleted(self) -> None:
+        sync = _make_sync()
+        sync.update_local_storage_manifest = AsyncMock(return_value=True)
+        sync._local_storage = {"manifest": []}
+
+        assert await verify_deletions(sync, [1, 2]) == []
+
+    async def test_skips_when_manifest_refresh_fails(self) -> None:
+        sync = _make_sync()
+        sync.update_local_storage_manifest = AsyncMock(return_value=None)
+        sync._local_storage = {"manifest": [_make_clip(1, NOW)]}
+
+        # Unverifiable must not be reported as a failed deletion.
+        assert await verify_deletions(sync, [1]) == []
+
+    async def test_no_ids_makes_no_request(self) -> None:
+        sync = _make_sync()
+        sync.update_local_storage_manifest = AsyncMock()
+        assert await verify_deletions(sync, []) == []
+        sync.update_local_storage_manifest.assert_not_called()

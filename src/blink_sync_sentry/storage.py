@@ -8,14 +8,21 @@ from __future__ import annotations
 
 import datetime
 import logging
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Sequence
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Sequence
+
+from blinkpy import api
 
 if TYPE_CHECKING:
     from blinkpy.blinkpy import Blink
     from blinkpy.sync_module import BlinkSyncModule, LocalStorageMediaItem
 
 _LOGGER = logging.getLogger(__name__)
+
+STORAGE_STATUS_PATH = (
+    "/api/v1/accounts/{account_id}/networks/{network_id}"
+    "/sync_modules/{sync_id}/local_storage/status"
+)
 
 
 @dataclass
@@ -31,6 +38,65 @@ class SyncModuleInfo:
     local_storage_compatible: bool
     local_storage_active: bool
     account_name: str = "default"
+
+
+@dataclass
+class StorageStatus:
+    """Usage and health status reported by a sync module.
+
+    Sourced from the undocumented ``local_storage/status`` endpoint, which
+    is what the Blink app uses to display "97% full". The drive percentage
+    is measured by the module itself, not estimated from the manifest, so
+    it stays correct when the manifest is empty or stale.
+    """
+
+    used_percent: int | None
+    full: bool
+    usb_state: str | None
+    warning: int | None
+    backup_enabled: bool
+    backup_in_progress: bool
+    last_backup_result: str | None
+    last_backup_completed: str | None
+    format_compatible: bool | None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> StorageStatus:
+        """Build a status object from the raw endpoint response."""
+        return cls(
+            used_percent=payload.get("usb_storage_used"),
+            full=bool(payload.get("usb_storage_full", False)),
+            usb_state=payload.get("usb_state"),
+            warning=payload.get("storage_warning"),
+            backup_enabled=bool(payload.get("sm_backup_enabled", False)),
+            backup_in_progress=bool(payload.get("sm_backup_in_progress", False)),
+            last_backup_result=payload.get("last_backup_result"),
+            last_backup_completed=payload.get("last_backup_completed"),
+            format_compatible=payload.get("usb_format_compatible"),
+            raw=payload,
+        )
+
+    @property
+    def is_nearly_full(self) -> bool:
+        """Return True when the module reports a full or ≥90% drive."""
+        if self.full:
+            return True
+        return self.used_percent is not None and self.used_percent >= 90
+
+    def as_dict(self) -> dict:
+        return {
+            "used_percent": self.used_percent,
+            "full": self.full,
+            "usb_state": self.usb_state,
+            "storage_warning": self.warning,
+            "backup_enabled": self.backup_enabled,
+            "backup_in_progress": self.backup_in_progress,
+            "last_backup_result": self.last_backup_result,
+            "last_backup_completed": self.last_backup_completed,
+            "format_compatible": self.format_compatible,
+            "raw": self.raw,
+        }
 
 
 @dataclass
@@ -96,6 +162,72 @@ async def fetch_manifest(sync: BlinkSyncModule) -> list[LocalStorageMediaItem]:
     manifest = list(sync._local_storage["manifest"])
     _LOGGER.info("Manifest contains %d clip(s).", len(manifest))
     return manifest
+
+
+async def fetch_storage_status(sync: BlinkSyncModule) -> StorageStatus | None:
+    """Read the drive usage status reported by the sync module.
+
+    Returns ``None`` when local storage is inactive, or when the module,
+    its firmware or the API region does not expose the endpoint (older
+    blinkpy releases also lack a wrapper, so fall back to a direct GET).
+    """
+    if not sync.local_storage:
+        return None
+
+    updater = getattr(sync, "update_local_storage_status", None)
+    if updater is None:
+        blink = sync.blink
+        url = blink.urls.base_url + STORAGE_STATUS_PATH.format(
+            account_id=blink.account_id,
+            network_id=sync.network_id,
+            sync_id=sync.sync_id,
+        )
+        # blinkpy's query helper swallows 404s and returns None.
+        payload = await api.http_get(blink, url)
+    else:
+        payload = await updater()
+
+    if not payload:
+        _LOGGER.debug("No local storage status reported for '%s'.", sync.name)
+        return None
+    return StorageStatus.from_payload(payload)
+
+
+async def verify_deletions(
+    sync: BlinkSyncModule,
+    deleted_ids: Sequence[int],
+) -> list[int]:
+    """Return deleted clip IDs that are still listed in a fresh manifest.
+
+    The delete endpoint returns HTTP 200 even when nothing was removed
+    (blinkpy#970), so a successful *response* is not proof of deletion.
+    Re-reading the manifest is the only way to confirm.
+
+    Returns an empty list when verification is impossible (no IDs, or the
+    manifest refresh failed), since an unverifiable result must not be
+    reported as a failed deletion.
+    """
+    if not deleted_ids:
+        return []
+
+    refreshed = await sync.update_local_storage_manifest()
+    if not refreshed:
+        _LOGGER.warning(
+            "Could not refresh the manifest for '%s' — skipping delete verification.",
+            sync.name,
+        )
+        return []
+
+    present = {clip.id for clip in sync._local_storage["manifest"]}
+    still_present = sorted(set(deleted_ids) & present)
+    if still_present:
+        _LOGGER.error(
+            "[%s] %d clip(s) reported as deleted are still in the manifest: %s",
+            sync.name,
+            len(still_present),
+            ", ".join(str(i) for i in still_present),
+        )
+    return still_present
 
 
 def compute_stats(clips: Sequence[LocalStorageMediaItem]) -> ClipStats:

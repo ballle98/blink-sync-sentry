@@ -28,6 +28,7 @@ class CleanupResult:
     archived: list[str] = field(default_factory=list)
     failed: list[int] = field(default_factory=list)
     skipped_dry_run: int = 0
+    still_present: list[int] = field(default_factory=list)
 
     @property
     def total_attempted(self) -> int:
@@ -42,6 +43,7 @@ class CleanupResult:
             "deleted_ids": self.deleted,
             "failed_ids": self.failed,
             "archived_files": self.archived,
+            "still_present_ids": self.still_present,
         }
 
 

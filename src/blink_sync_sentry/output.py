@@ -7,7 +7,7 @@ import sys
 from typing import Any, Sequence
 
 from blink_sync_sentry.cleanup import CleanupResult
-from blink_sync_sentry.storage import ClipStats, SyncModuleInfo
+from blink_sync_sentry.storage import ClipStats, StorageStatus, SyncModuleInfo
 
 try:
     from rich.console import Console
@@ -93,12 +93,15 @@ def format_clip_stats(
     use_json: bool = False,
     show_storage_estimates: bool = False,
     storage_capacity_gb: int | None = None,
+    storage_status: StorageStatus | None = None,
 ) -> None:
     """Print clip inventory statistics."""
     from .storage import estimate_storage_usage
-    
+
     if use_json:
         data = {"account": account_name, "sync_module": sync_name, **stats.as_dict()}
+        if storage_status is not None:
+            data["drive"] = storage_status.as_dict()
         if storage_capacity_gb:
             total_gb = stats.total_bytes / (1024 * 1024 * 1024)
             percent_used = (total_gb / storage_capacity_gb) * 100
@@ -123,12 +126,19 @@ def format_clip_stats(
         print(f"  Oldest:     {stats.oldest.isoformat()}")
     if stats.newest:
         print(f"  Newest:     {stats.newest.isoformat()}")
-    
+
+    if storage_status is not None and storage_status.used_percent is not None:
+        detail = "reported by sync module"
+        if storage_status.full:
+            detail += ", flagged full"
+        print(f"  Drive:      {storage_status.used_percent}% used ({detail})")
+
     if storage_capacity_gb:
         total_gb = stats.total_bytes / (1024 * 1024 * 1024)
         percent_used = (total_gb / storage_capacity_gb) * 100
         free_gb = storage_capacity_gb - total_gb
-        print(f"  Storage:    {storage_capacity_gb}GB drive")
+        source = " (manifest estimate)" if storage_status is not None else ""
+        print(f"  Storage:    {storage_capacity_gb}GB drive{source}")
         if percent_used < 0.01:
             percent_str = "<0.01"
         else:
@@ -201,4 +211,12 @@ def format_cleanup_result(
     if result.failed:
         print(f"Failed:   {len(result.failed)}")
         for fid in result.failed:
+            print(f"  - clip {fid}", file=sys.stderr)
+    if result.still_present:
+        print(
+            f"WARNING:  {len(result.still_present)} clip(s) were reported deleted "
+            f"but are still listed in the manifest:",
+            file=sys.stderr,
+        )
+        for fid in result.still_present:
             print(f"  - clip {fid}", file=sys.stderr)

@@ -25,8 +25,10 @@ from blink_sync_sentry.output import (
 from blink_sync_sentry.storage import (
     compute_stats,
     fetch_manifest,
+    fetch_storage_status,
     list_sync_modules,
     select_clips_for_deletion,
+    verify_deletions,
 )
 
 _LOGGER = logging.getLogger("blink_sync_sentry")
@@ -327,12 +329,23 @@ async def _cmd_status(
                     continue
                 clips = await fetch_manifest(sync)
                 stats = compute_stats(clips)
+                status = await fetch_storage_status(sync)
+                if status is not None and not clips and status.is_nearly_full:
+                    _LOGGER.warning(
+                        "[%s/%s] Drive reports %s%% used but the manifest lists no clips. "
+                        "Files may be untracked; clearing storage from the Blink app "
+                        "usually frees them.",
+                        acct.name,
+                        sync.name,
+                        status.used_percent,
+                    )
                 # Get storage capacity: CLI > config > None
                 storage_capacity = args.storage_capacity or cfg.effective_storage_capacity(acct)
                 format_clip_stats(
                     sync.name, stats, account_name=acct.name, use_json=args.use_json,
                     show_storage_estimates=args.storage_estimates,
-                    storage_capacity_gb=storage_capacity
+                    storage_capacity_gb=storage_capacity,
+                    storage_status=status,
                 )
                 found_any = True
         finally:
@@ -408,8 +421,9 @@ async def _cmd_clean(
                     archive_dir=archive_dir,
                     request_delay=cfg.request_delay_seconds,
                 )
+                result.still_present = await verify_deletions(sync, result.deleted)
                 format_cleanup_result(result, use_json=args.use_json)
-                if result.failed:
+                if result.failed or result.still_present:
                     worst_code = max(worst_code, EXIT_ERROR)
         finally:
             await close_blink(blink)
