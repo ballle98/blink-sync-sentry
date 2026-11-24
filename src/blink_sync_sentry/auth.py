@@ -69,11 +69,12 @@ async def create_blink(acct: AccountConfig) -> Blink:
         saved = await _load_token(token_path)
 
         if saved:
-            auth = Auth(saved, no_prompt=acct.no_prompt)
+            auth = Auth(saved, no_prompt=acct.no_prompt, session=session)
         elif acct.username and acct.password:
             auth = Auth(
                 {"username": acct.username, "password": acct.password},
                 no_prompt=acct.no_prompt,
+                session=session,
             )
         else:
             await session.close()
