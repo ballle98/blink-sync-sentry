@@ -331,13 +331,17 @@ async def _cmd_status(
                 stats = compute_stats(clips)
                 status = await fetch_storage_status(sync)
                 if status is not None and not clips and status.is_nearly_full:
+                    if status.used_percent is not None:
+                        detail = f"reports {status.used_percent}% used"
+                    else:
+                        detail = "is flagged full"
                     _LOGGER.warning(
-                        "[%s/%s] Drive reports %s%% used but the manifest lists no clips. "
+                        "[%s/%s] Drive %s but the manifest lists no clips. "
                         "Files may be untracked; clearing storage from the Blink app "
                         "usually frees them.",
                         acct.name,
                         sync.name,
-                        status.used_percent,
+                        detail,
                     )
                 # Get storage capacity: CLI > config > None
                 storage_capacity = args.storage_capacity or cfg.effective_storage_capacity(acct)
