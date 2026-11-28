@@ -203,6 +203,29 @@ reported as a failure.
 blink-sync-sentry clean --retention-days 14 --force --archive-dir /mnt/nas/blink-archive
 ```
 
+### Purge all clips (irreversible)
+
+```bash
+# Dry run — makes no changes
+blink-sync-sentry clean --purge-all
+
+# Actually clear the drive
+blink-sync-sentry clean --purge-all --force
+
+# Archive every clip first (aborts the purge if any archive fails)
+blink-sync-sentry clean --purge-all --force --archive-dir /mnt/nas/blink-archive
+```
+
+This uses the Blink app's own `DELETE .../local_storage` route. It is the
+only way to clear a drive that is full while the manifest lists no clips,
+which is why it needs **both** `--purge-all` and `--force`. There is no
+undo, so keep `--archive-dir` unless the clips are worthless.
+
+Success is not inferred from the HTTP response: the tool compares
+`usb_storage_used` before and after and exits `1` if it did not drop. If the
+status endpoint is unavailable, it checks that a fresh manifest is empty
+instead. Neither check passed means the purge is reported as unverified.
+
 ### Watch (daemon) mode
 
 ```bash

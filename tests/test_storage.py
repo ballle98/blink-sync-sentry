@@ -15,6 +15,7 @@ from blink_sync_sentry.storage import (
     fetch_storage_status,
     filter_clips_by_age,
     filter_clips_by_usage,
+    request_purge_local_storage,
     select_clips_for_deletion,
     verify_deletions,
 )
@@ -330,3 +331,33 @@ class TestFetchManifest:
 
         assert clips == []
         assert "may be stale" in caplog.text
+
+
+class TestRequestPurgeLocalStorage:
+    def _make_blink(self, status: int) -> MagicMock:
+        blink = MagicMock()
+        blink.urls.base_url = "https://rest.example"
+        blink.account_id = 111
+        blink.auth.header = {"Authorization": "Bearer token"}
+        blink.auth.session.delete = AsyncMock(return_value=MagicMock(status=status))
+        blink.auth.validate_response = AsyncMock(return_value={"id": 9})
+        return blink
+
+    async def test_uses_delete_verb_and_full_path(self) -> None:
+        blink = self._make_blink(200)
+
+        payload = await request_purge_local_storage(blink, _make_sync())
+
+        assert payload == {"id": 9}
+        url = blink.auth.session.delete.await_args.args[0]
+        assert url == (
+            "https://rest.example/api/v1/accounts/111/networks/654321"
+            "/sync_modules/123456/local_storage"
+        )
+        blink.auth.validate_response.assert_awaited_once()
+
+    async def test_404_is_treated_as_unavailable(self) -> None:
+        blink = self._make_blink(404)
+
+        assert await request_purge_local_storage(blink, _make_sync()) is None
+        blink.auth.validate_response.assert_not_called()

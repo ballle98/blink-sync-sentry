@@ -13,13 +13,14 @@ from blinkpy.blinkpy import Blink
 
 from blink_sync_sentry import __version__
 from blink_sync_sentry.auth import AuthError, close_blink, create_blink
-from blink_sync_sentry.cleanup import CleanupResult, run_cleanup
+from blink_sync_sentry.cleanup import CleanupResult, PurgeResult, purge_all_clips, run_cleanup
 from blink_sync_sentry.config import AccountConfig, AppConfig, RetentionConfig, build_config
 from blink_sync_sentry.daemon import WatchDaemon
 from blink_sync_sentry.output import (
     format_cleanup_preview,
     format_cleanup_result,
     format_clip_stats,
+    format_purge_result,
     format_sync_modules,
 )
 from blink_sync_sentry.storage import (
@@ -132,6 +133,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Actually delete clips (default is dry-run).",
+    )
+    clean_p.add_argument(
+        "--purge-all",
+        action="store_true",
+        help=(
+            "Purge ALL local-storage clips, including ones missing from the "
+            "manifest. Requires --force; irreversibly clears the drive."
+        ),
     )
 
     # --- watch ---
@@ -370,7 +379,11 @@ async def _cmd_clean(
         retention = cfg.effective_retention(acct)
         archive_dir = cfg.effective_archive_dir(acct)
 
-        if retention.retention_days is None and retention.max_usage_gb is None:
+        if (
+            not getattr(args, "purge_all", False)
+            and retention.retention_days is None
+            and retention.max_usage_gb is None
+        ):
             _LOGGER.error(
                 "Account '%s': specify --retention-days and/or --max-usage-gb.",
                 acct.name,
@@ -394,6 +407,30 @@ async def _cmd_clean(
                         acct.name,
                         sync.name,
                     )
+                    continue
+
+                if getattr(args, "purge_all", False):
+                    if not force:
+                        _LOGGER.warning(
+                            "[%s/%s] DRY RUN: would purge ALL local-storage clips. "
+                            "Requires --force --purge-all.",
+                            acct.name,
+                            sync.name,
+                        )
+                        format_purge_result(
+                            PurgeResult(skipped_dry_run=True), use_json=args.use_json
+                        )
+                        worst_code = max(worst_code, EXIT_DRY_RUN)
+                    else:
+                        purge = await purge_all_clips(
+                            blink,
+                            sync,
+                            force=True,
+                            archive_dir=archive_dir,
+                        )
+                        format_purge_result(purge, use_json=args.use_json)
+                        if not purge.verified:
+                            worst_code = max(worst_code, EXIT_ERROR)
                     continue
 
                 clips = await fetch_manifest(sync)

@@ -6,7 +6,7 @@ import json
 import sys
 from typing import Any, Sequence
 
-from blink_sync_sentry.cleanup import CleanupResult
+from blink_sync_sentry.cleanup import CleanupResult, PurgeResult
 from blink_sync_sentry.storage import ClipStats, StorageStatus, SyncModuleInfo
 
 try:
@@ -220,3 +220,33 @@ def format_cleanup_result(
         )
         for fid in result.still_present:
             print(f"  - clip {fid}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# purge-all subcommand (part of clean)
+# ---------------------------------------------------------------------------
+
+def format_purge_result(
+    result: PurgeResult,
+    *,
+    use_json: bool = False,
+) -> None:
+    """Print the outcome of a full local-storage purge."""
+    if use_json:
+        _print_json(result.as_dict())
+        return
+
+    if result.skipped_dry_run:
+        print("DRY RUN: ALL local-storage clips would be purged.")
+        return
+
+    print(f"Purge requested:    {'yes' if result.command_accepted else 'no'}")
+    if result.usage_before is not None:
+        print(f"Drive usage before: {result.usage_before}%")
+    if result.usage_after is not None:
+        print(f"Drive usage after:  {result.usage_after}%")
+    if result.archived:
+        print(f"Archived:           {len(result.archived)}")
+    print(f"Verified clear:     {'yes' if result.verified else 'NO'}")
+    if result.note:
+        print(f"Note:               {result.note}", file=sys.stderr)

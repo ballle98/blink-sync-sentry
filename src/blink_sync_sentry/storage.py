@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Sequence
 
 from blinkpy import api
+from blinkpy.helpers.constants import TIMEOUT
 
 if TYPE_CHECKING:
     from blinkpy.blinkpy import Blink
@@ -19,10 +20,11 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-STORAGE_STATUS_PATH = (
+STORAGE_PATH = (
     "/api/v1/accounts/{account_id}/networks/{network_id}"
-    "/sync_modules/{sync_id}/local_storage/status"
+    "/sync_modules/{sync_id}/local_storage"
 )
+STORAGE_STATUS_PATH = STORAGE_PATH + "/status"
 
 
 @dataclass
@@ -171,6 +173,31 @@ async def fetch_manifest(sync: BlinkSyncModule) -> list[LocalStorageMediaItem]:
     manifest = list(sync._local_storage["manifest"])
     _LOGGER.info("Manifest contains %d clip(s).", len(manifest))
     return manifest
+
+
+async def request_purge_local_storage(
+    blink: Blink,
+    sync: BlinkSyncModule,
+) -> dict | None:
+    """Send the app's destructive `DELETE .../local_storage` request.
+
+    No guard is applied here; callers must have already checked `--force`
+    and the explicit purge confirmation. Returns the command response, or
+    ``None`` if the route is unavailable on this firmware/region.
+    """
+    url = blink.urls.base_url + STORAGE_PATH.format(
+        account_id=blink.account_id,
+        network_id=sync.network_id,
+        sync_id=sync.sync_id,
+    )
+    _LOGGER.warning("Sending DELETE %s", url)
+    response = await blink.auth.session.delete(
+        url, headers=blink.auth.header, timeout=TIMEOUT
+    )
+    if response.status == 404:
+        _LOGGER.warning("Purge endpoint is not available on this sync module.")
+        return None
+    return await blink.auth.validate_response(response, json_resp=True)
 
 
 async def fetch_storage_status(sync: BlinkSyncModule) -> StorageStatus | None:
